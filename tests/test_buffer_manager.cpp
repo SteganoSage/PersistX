@@ -1,5 +1,5 @@
-#include "persistx/buffer_manager.hpp"
-#include "persistx/page.hpp"
+#include "buffer_manager.hpp"
+#include "page.hpp"
 #include <iostream>
 #include <cassert>
 #include <cstring>

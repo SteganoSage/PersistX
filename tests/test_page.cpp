@@ -1,4 +1,4 @@
-#include "persistx/page.hpp"
+#include "page.hpp"
 #include <iostream>
 #include <string>
 #include <cassert>

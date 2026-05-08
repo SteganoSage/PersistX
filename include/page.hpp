@@ -3,7 +3,7 @@
 // PersistX — Slotted Page Layout
 // ═══════════════════════════════════════════════════════════════════════════════
 
-#include "persistx/common.hpp"
+#include "common.hpp"
 #include <cstring>
 #include <vector>
 

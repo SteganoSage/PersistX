@@ -1,5 +1,5 @@
-#include "persistx/disk_manager.hpp"
-#include "persistx/page.hpp"
+#include "disk_manager.hpp"
+#include "page.hpp"
 #include <iostream>
 #include <cassert>
 #include <cstring>

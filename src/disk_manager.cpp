@@ -1,5 +1,5 @@
-#include "persistx/disk_manager.hpp"
-#include "persistx/common.hpp"
+#include "disk_manager.hpp"
+#include "common.hpp"
 #include <cstring>
 #include <stdexcept>
 #include <iostream>
