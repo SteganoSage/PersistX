@@ -181,6 +181,36 @@ bool Page::delete_record(slot_id_t slot_id, lsn_t lsn) {
     return true;
 }
 
+// ─── update_record ────────────────────────────────────────────────────────────
+// In-place overwrite of a slot's payload bytes.
+//
+// The new data MUST be exactly the same size as the original record.
+// This is intentional: WAL UPDATE records store full before/after images of
+// the same logical tuple, so the byte count never changes between the original
+// write and any subsequent undo (restore of before-image).
+//
+// Attempting to change the size would require relocating the record in the
+// data region and rebuilding the slot directory — that is compaction, not an
+// update. If variable-size updates are ever needed, delete + reinsert is the
+// correct path.
+ 
+bool Page::update_record(slot_id_t slot_id, const uint8_t* data, uint16_t size,
+                         lsn_t lsn) {
+    if (slot_id >= get_slot_count()) return false;
+ 
+    auto [offset, length] = read_slot(slot_id);
+    if (offset == SLOT_TOMBSTONE) return false;
+ 
+    // Reject size mismatches — caller has a logic error if this fires.
+    if (size != length) return false;
+ 
+    // Overwrite the payload bytes in-place (the uint16_t size prefix stays).
+    std::memcpy(buffer_ + offset + sizeof(uint16_t), data, size);
+ 
+    if (lsn > get_page_lsn()) set_page_lsn(lsn);
+    return true;
+}
+
 // ─── compact ──────────────────────────────────────────────────────────────────
 
 void Page::compact() {

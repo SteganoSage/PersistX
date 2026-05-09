@@ -90,6 +90,7 @@ public:
 
     // Delete: marks slot tombstone, increments tombstone_count. No compact.
     bool delete_record(slot_id_t slot_id, lsn_t lsn = 0);
+    bool update_record(slot_id_t slot_id, const uint8_t* data, uint16_t size, lsn_t lsn = 0);
 
     // ── compaction ───────────────────────────────────────────────────────────
 
