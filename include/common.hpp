@@ -26,6 +26,7 @@ using page_id_t  = uint32_t;
 using slot_id_t  = uint16_t;
 using frame_id_t = uint32_t;
 using lsn_t      = uint64_t;
+using txn_id_t   = uint64_t;
 
 // ─── sentinel values ─────────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ inline constexpr page_id_t  INVALID_PAGE_ID  = UINT32_MAX;
 inline constexpr slot_id_t  INVALID_SLOT_ID  = UINT16_MAX;
 inline constexpr frame_id_t INVALID_FRAME_ID = UINT32_MAX;
 inline constexpr lsn_t      INVALID_LSN      = UINT64_MAX;
+inline constexpr txn_id_t   INVALID_TXN_ID   = UINT64_MAX;
 
 // ─── page type tag ───────────────────────────────────────────────────────────
 
@@ -41,6 +43,24 @@ enum class PageType : uint8_t {
     DATA  = 1,
     INDEX = 2,
     WAL   = 3,
+};
+
+enum class TxnState : uint8_t {
+    GROWING = 0,
+    COMMITTED = 1,
+    ABORTED = 2,
+};
+
+enum class LogRecordType: uint8_t {
+    INVALID          = 0,
+    BEGIN            = 1,
+    UPDATE           = 2,
+    COMMIT           = 3,
+    ABORT            = 4,
+    TXN_END          = 5,
+    CLR              = 6,
+    CHECKPOINT_BEGIN = 7,
+    CHECKPOINT_END   = 8,
 };
 
 // ─── record identifier ──────────────────────────────────────────────────────
@@ -61,4 +81,6 @@ struct RID {
     bool is_valid() const {
         return page_id != INVALID_PAGE_ID && slot_id != INVALID_SLOT_ID;
     }
+
+
 };

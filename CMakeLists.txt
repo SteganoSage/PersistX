@@ -23,6 +23,7 @@ add_library(persistx_lib
     src/disk_manager.cpp
     src/replacer.cpp
     src/buffer_manager.cpp
+    src/log_manager.cpp
 )
 
 target_include_directories(persistx_lib PUBLIC include)
