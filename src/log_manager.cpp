@@ -57,35 +57,29 @@ void LogManager::flush(lsn_t up_to_lsn) {
     // Already on stable storage — nothing to do.
     if (flushed_lsn_ != INVALID_LSN && flushed_lsn_ >= up_to_lsn) return;
 
-    // Nothing buffered — nothing to write.
+    flush_all_unlocked();
+}
+
+// ─── flush_all_unlocked ──────────────────────────────────────────────────────
+// Private helper — caller MUST hold mutex_.
+
+void LogManager::flush_all_unlocked() {
     if (buffer_.empty()) return;
 
     log_file_.write(reinterpret_cast<const char*>(buffer_.data()),
                     static_cast<std::streamsize>(buffer_.size()));
     log_file_.flush();
 
-    // flushed_lsn_ = highest LSN that is now on stable storage.
-    // next_lsn_ is always one past the last assigned, so the highest
-    // flushed LSN is next_lsn_ - 1.
     if (next_lsn_ > 0) flushed_lsn_ = next_lsn_ - 1;
 
     buffer_.clear();
 }
 
-// ─── flush_all ───────────────────────────────────────────────────────────────
+// ─── flush_all (public) ──────────────────────────────────────────────────────
 
 void LogManager::flush_all() {
     std::lock_guard<std::mutex> lock(mutex_);
-
-    if (buffer_.empty()) return;
-
-    log_file_.write(reinterpret_cast<const char*>(buffer_.data()),
-                    static_cast<std::streamsize>(buffer_.size()));
-    log_file_.flush();
-
-    if (next_lsn_ > 0) flushed_lsn_ = next_lsn_ - 1;
-
-    buffer_.clear();
+    flush_all_unlocked();
 }
 
 // ─── read_log ────────────────────────────────────────────────────────────────

@@ -51,4 +51,7 @@ private:
     lsn_t flushed_lsn_{INVALID_LSN};
 
     std::mutex mutex_;
+
+    // Private helper — caller must hold mutex_.
+    void flush_all_unlocked();
 };

@@ -142,9 +142,7 @@ void BufferManager::flush_all_pages() {
     std::lock_guard<std::mutex> lock(bm_mutex_);
 
     for (size_t i = 0; i < pool_size_; ++i) {
-        if (page_ids_[i] != INVALID_PAGE_ID) {
-            // WAL rule applies to every frame, dirty or not, because the
-            // checkpoint path calls this unconditionally.
+        if (page_ids_[i] != INVALID_PAGE_ID && dirty_[i]) {
             enforce_wal(static_cast<frame_id_t>(i));
             disk_manager_->write_page(page_ids_[i], pages_[i].raw());
             dirty_[i] = false;

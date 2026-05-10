@@ -1,4 +1,5 @@
 #include "transaction_manager.hpp"
+#include <cassert>
 #include <stdexcept>
 
 // ─── constructor ─────────────────────────────────────────────────────────────
@@ -80,16 +81,15 @@ void TransactionManager::commit(Transaction* txn) {
 void TransactionManager::abort(Transaction* txn) {
     txn_id_t txn_id = txn->get_txn_id();
 
-    // 1. Write ABORT record (the chain link from abort back to the last UPDATE).
+    // 1. Save the undo starting point BEFORE writing the ABORT record.
+    //    This way the undo loop skips the ABORT record entirely.
+    lsn_t undo_lsn = txn->get_prev_lsn();
+
+    // 2. Write ABORT record.
     LogRecord abort_rec(txn_id, txn->get_prev_lsn(), LogRecordType::ABORT);
     lsn_t abort_lsn = log_manager_->append(abort_rec);
     txn->set_prev_lsn(abort_lsn);
     txn->set_state(TxnState::ABORTED);
-
-    // 2. Walk the undo chain.
-    //    undo_lsn starts at the ABORT record. The loop follows prev_lsn pointers
-    //    until it reaches a BEGIN (stops) or INVALID_LSN (safety stop).
-    lsn_t undo_lsn = txn->get_prev_lsn();  // = abort_lsn
 
     while (undo_lsn != INVALID_LSN) {
         // read_record_at_lsn flushes the in-memory buffer first so the record
@@ -113,11 +113,18 @@ void TransactionManager::abort(Transaction* txn) {
             if (page != nullptr) {
                 const std::vector<uint8_t>& old_data = rec.get_old_tuple_data();
 
-                // Restore the before-image in-place.
-                page->update_record(rec.get_slot_id(),
-                                    old_data.data(),
-                                    static_cast<uint16_t>(old_data.size()),
-                                    0 /* lsn — will stamp via set_page_lsn below */);
+                // Restore the before-image.
+                // If old_data is empty, this UPDATE was an INSERT — undo is a delete.
+                // Otherwise, overwrite with the before-image.
+                if (old_data.empty()) {
+                    page->delete_record(rec.get_slot_id(), 0);
+                } else {
+                    bool ok = page->update_record(rec.get_slot_id(),
+                                        old_data.data(),
+                                        static_cast<uint16_t>(old_data.size()),
+                                        0 /* lsn — will stamp via set_page_lsn below */);
+                    assert(ok && "abort: update_record failed — before-image size mismatch");
+                }
 
                 // Write a CLR to record this undo step.
                 // CLR layout:
