@@ -28,6 +28,7 @@ add_library(persistx_lib
     src/log_manager.cpp
     src/transaction_manager.cpp     # Phase 6
     src/checkpoint_manager.cpp      # Phase 8
+    src/recovery_manager.cpp        # Phase 9
 )
 
 target_include_directories(persistx_lib PUBLIC include)
@@ -59,3 +60,8 @@ target_link_libraries(test_transaction PRIVATE persistx_lib)
 
 add_executable(test_checkpoint tests/test_checkpoint.cpp)
 target_link_libraries(test_checkpoint PRIVATE persistx_lib)
+
+# ─── Phase 9: recovery test ─────────────────────────────────────────────────
+
+add_executable(test_recovery tests/test_recovery.cpp)
+target_link_libraries(test_recovery PRIVATE persistx_lib)
