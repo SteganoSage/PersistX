@@ -15,6 +15,9 @@ add_compile_options(
     -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion
 )
 
+# ─── ensure test data directory exists in build/ ──────────────────────────────
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/storage")
+
 # ─── core library ─────────────────────────────────────────────────────────────
 
 add_library(persistx_lib
@@ -24,6 +27,7 @@ add_library(persistx_lib
     src/buffer_manager.cpp
     src/log_manager.cpp
     src/transaction_manager.cpp     # Phase 6
+    src/checkpoint_manager.cpp      # Phase 8
 )
 
 target_include_directories(persistx_lib PUBLIC include)
@@ -50,3 +54,8 @@ target_link_libraries(test_wal PRIVATE persistx_lib)
 
 add_executable(test_transaction tests/test_transaction.cpp)
 target_link_libraries(test_transaction PRIVATE persistx_lib)
+
+# ─── Phase 8: checkpoint test ────────────────────────────────────────────────
+
+add_executable(test_checkpoint tests/test_checkpoint.cpp)
+target_link_libraries(test_checkpoint PRIVATE persistx_lib)

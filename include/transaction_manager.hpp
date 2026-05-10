@@ -59,6 +59,8 @@ public:
     // The pointer is invalid after this call.
     void abort(Transaction* txn);
 
+    std::vector<std::pair<txn_id_t, lsn_t>> get_att_snapshot();
+
     // ── WAL helpers ──────────────────────────────────────────────────────────
 
     // Log a data modification on behalf of txn.

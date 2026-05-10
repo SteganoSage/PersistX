@@ -30,6 +30,8 @@ public:
     Page* new_page(page_id_t& page_id);
     bool  delete_page(page_id_t page_id);
 
+    std::vector<std::pair<page_id_t, lsn_t>> get_dirty_pages();
+
 private:
     // ── WAL helper ────────────────────────────────────────────────────────────
     // Before writing frame to disk, flush the log up to the page's LSN.

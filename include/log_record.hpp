@@ -36,6 +36,16 @@ public:
           new_tuple_data_(std::move(new_data)),
           undo_next_lsn_(undo_next_lsn) {}
 
+    // Constructor 5: CHECKPOINT_END -- carries ATT (old_data) and DPT (new_data)
+    // page_id and slot_id are unused (set to INVALID) but included in the
+    // serialisation format so the existing UPDATE codec handles it unchanged.
+    LogRecord(LogRecordType type,
+              std::vector<uint8_t> att_data, std::vector<uint8_t> dpt_data)
+        : txn_id_(INVALID_TXN_ID), prev_lsn_(INVALID_LSN), type_(type),
+          page_id_(INVALID_PAGE_ID), slot_id_(INVALID_SLOT_ID),
+          old_tuple_data_(std::move(att_data)),
+          new_tuple_data_(std::move(dpt_data)) {}
+
     // --- Getters ---
 
     lsn_t         get_lsn()        const { return lsn_; }
@@ -65,7 +75,7 @@ public:
         const uint32_t HEADER_SIZE = 4 + 8 + 8 + 8 + 1;  // total_size + lsn + txn_id + prev_lsn + type
         uint32_t total_size = HEADER_SIZE;
 
-        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR) {
+        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR || type_ == LogRecordType::CHECKPOINT_END) {
             total_size += 4;  // page_id
             total_size += 2;  // slot_id
             total_size += 4;  // old_data length
@@ -99,7 +109,7 @@ public:
         offset += sizeof(type_byte);
 
         // Step 4: write UPDATE / CLR payload
-        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR) {
+        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR || type_ == LogRecordType::CHECKPOINT_END) {
             std::memcpy(&buf[offset], &page_id_, sizeof(page_id_));
             offset += sizeof(page_id_);
 
@@ -164,7 +174,7 @@ public:
         offset += sizeof(type_byte);
 
         // Read UPDATE / CLR payload
-        if (rec.type_ == LogRecordType::UPDATE || rec.type_ == LogRecordType::CLR) {
+        if (rec.type_ == LogRecordType::UPDATE || rec.type_ == LogRecordType::CLR || rec.type_ == LogRecordType::CHECKPOINT_END) {
             std::memcpy(&rec.page_id_, &data[offset], sizeof(rec.page_id_));
             offset += sizeof(rec.page_id_);
 

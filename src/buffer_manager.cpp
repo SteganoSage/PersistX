@@ -204,3 +204,14 @@ bool BufferManager::delete_page(page_id_t page_id) {
     free_list_.push_back(frame_id);
     return true;
 }
+
+std::vector<std::pair<page_id_t, lsn_t>> BufferManager::get_dirty_pages() {
+    std::lock_guard<std::mutex> lock(bm_mutex_);
+    std::vector<std::pair<page_id_t, lsn_t>> dirty_pages;
+    for (size_t i = 0; i < pool_size_; ++i) {
+        if (dirty_[i] && page_ids_[i] != INVALID_PAGE_ID) {
+            dirty_pages.emplace_back(page_ids_[i], pages_[i].get_page_lsn());
+        }
+    }
+    return dirty_pages;
+}

@@ -184,3 +184,12 @@ lsn_t TransactionManager::log_update(Transaction* txn, page_id_t page_id, slot_i
     txn->set_prev_lsn(lsn);
     return lsn;
 }
+
+std::vector<std::pair<txn_id_t, lsn_t>> TransactionManager::get_att_snapshot() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::pair<txn_id_t, lsn_t>> snapshot;
+    for (const auto& [txn_id, txn] : att_) {
+        snapshot.emplace_back(txn_id, txn->get_prev_lsn());
+    }
+    return snapshot;
+}
