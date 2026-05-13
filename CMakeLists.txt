@@ -29,6 +29,8 @@ add_library(persistx_lib
     src/transaction_manager.cpp     # Phase 6
     src/checkpoint_manager.cpp      # Phase 8
     src/recovery_manager.cpp        # Phase 9
+    src/btree_page.cpp
+    src/btree_index.cpp
 )
 
 target_include_directories(persistx_lib PUBLIC include)
@@ -65,3 +67,11 @@ target_link_libraries(test_checkpoint PRIVATE persistx_lib)
 
 add_executable(test_recovery tests/test_recovery.cpp)
 target_link_libraries(test_recovery PRIVATE persistx_lib)
+
+
+# btrees
+add_executable(test_btree tests/test_btree.cpp)
+target_link_libraries(test_btree PRIVATE persistx_lib)
+
+add_executable(overall_tests tests/overall_tests.cpp)
+target_link_libraries(overall_tests PRIVATE persistx_lib)

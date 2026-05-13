@@ -241,6 +241,11 @@ int64_t BTreeInternalPage::get_key_at(uint16_t index) const {
     std::memcpy(&val, page_->raw() + key_offset(index), sizeof(val));
     return val;
 }
+int64_t BTreeLeafPage::get_key_at(uint16_t index) const {
+    int64_t key;
+    std::memcpy(&key, page_->raw() + entry_offset(index), sizeof(key));
+    return key;
+}
 
 page_id_t BTreeInternalPage::get_child_at(uint16_t index) const {
     page_id_t val;
