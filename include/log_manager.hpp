@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <unordered_map>
 #include <mutex>
 
 class LogManager {
@@ -49,6 +50,10 @@ private:
 
     lsn_t next_lsn_{0};
     lsn_t flushed_lsn_{INVALID_LSN};
+    uint64_t write_offset_{0};  // byte position of next write in WAL file
+
+    // LSN → file byte offset for O(1) record lookup.
+    std::unordered_map<lsn_t, uint64_t> lsn_index_;
 
     std::mutex mutex_;
 

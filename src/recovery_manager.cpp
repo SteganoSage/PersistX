@@ -67,6 +67,11 @@ void RecoveryManager::recover() {
     analyze();
     redo();
     undo();
+
+    // Flush CLRs and TXN_END records written during undo so they survive
+    // a crash immediately after recovery returns.
+    log_manager_->flush_all();
+    buffer_manager_->flush_all_pages();
 }
 
 // ─── Pass 1: Analysis ────────────────────────────────────────────────────────
@@ -203,25 +208,31 @@ void RecoveryManager::redo() {
 
         if (rec.get_type() == LogRecordType::UPDATE) {
             if (old_data.empty()) {
-                // Original operation was an INSERT → redo by inserting.
-                page->insert_record(new_data.data(),
-                                    static_cast<uint16_t>(new_data.size()), 0);
+                // Original operation was an INSERT — redo by inserting at
+                // the exact slot_id from the log record.  Never use
+                // insert_record() here: it may allocate a different slot.
+                page->redo_insert(rec.get_slot_id(),
+                                  new_data.data(),
+                                  static_cast<uint16_t>(new_data.size()),
+                                  rec.get_lsn());
             } else {
-                // Original operation was an UPDATE → redo by overwriting.
+                // Original operation was an UPDATE — redo by overwriting.
                 page->update_record(rec.get_slot_id(),
                                     new_data.data(),
-                                    static_cast<uint16_t>(new_data.size()), 0);
+                                    static_cast<uint16_t>(new_data.size()),
+                                    rec.get_lsn());
             }
         } else {
             // CLR — redo whatever the compensation did.
             if (new_data.empty()) {
-                // CLR undid an insert → redo the delete.
-                page->delete_record(rec.get_slot_id(), 0);
+                // CLR undid an insert — redo the delete.
+                page->delete_record(rec.get_slot_id(), rec.get_lsn());
             } else {
-                // CLR undid an update → redo restoring the before-image.
+                // CLR undid an update — redo restoring the before-image.
                 page->update_record(rec.get_slot_id(),
                                     new_data.data(),
-                                    static_cast<uint16_t>(new_data.size()), 0);
+                                    static_cast<uint16_t>(new_data.size()),
+                                    rec.get_lsn());
             }
         }
 

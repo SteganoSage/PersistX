@@ -133,6 +133,40 @@ slot_id_t Page::insert_record(const uint8_t* data, uint16_t size, lsn_t lsn) {
     return sid;
 }
 
+// ─── redo_insert ──────────────────────────────────────────────────────────────
+// Recovery-only: inserts a record at a specific slot_id to reproduce the exact
+// physical state of the original operation. During normal operation, use
+// insert_record() which allocates a slot automatically.
+
+slot_id_t Page::redo_insert(slot_id_t target_slot, const uint8_t* data,
+                            uint16_t size, lsn_t lsn) {
+    // 1. Write [size_prefix][payload] at free_space_ptr.
+    uint32_t offset = get_free_space_ptr();
+    wr_u16(buffer_ + offset, size);
+    std::memcpy(buffer_ + offset + sizeof(uint16_t), data, size);
+    set_free_space_ptr(offset + static_cast<uint32_t>(sizeof(uint16_t)) + size);
+
+    // 2. Ensure slot_count covers target_slot.
+    uint16_t current_count = get_slot_count();
+    if (target_slot >= current_count) {
+        set_slot_count(static_cast<uint16_t>(target_slot + 1));
+    } else {
+        // Reusing an existing slot — if it's a tombstone, fix the count.
+        auto [old_off, old_len] = read_slot(target_slot);
+        if (old_off == SLOT_TOMBSTONE) {
+            set_tombstone_count(static_cast<uint16_t>(get_tombstone_count() - 1));
+        }
+    }
+
+    // 3. Write the slot entry at the exact target position.
+    write_slot(target_slot, offset, size);
+
+    // 4. Stamp page_lsn.
+    if (lsn > get_page_lsn()) set_page_lsn(lsn);
+
+    return target_slot;
+}
+
 // ─── read_record ──────────────────────────────────────────────────────────────
 
 bool Page::read_record(slot_id_t slot_id, std::vector<uint8_t>& out) const {

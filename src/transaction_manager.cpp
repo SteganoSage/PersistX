@@ -37,6 +37,8 @@ Transaction* TransactionManager::begin() {
 // policy) — dirty pages will reach disk later via eviction or checkpoint.
 
 void TransactionManager::commit(Transaction* txn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
     txn_id_t txn_id = txn->get_txn_id();
 
     // 1. Write COMMIT record (links onto the transaction's prev chain).
@@ -51,17 +53,12 @@ void TransactionManager::commit(Transaction* txn) {
 
     txn->set_state(TxnState::COMMITTED);
 
-    // 3. Write TXN_END — bookkeeping record for recovery (marks the transaction
-    //    as fully complete; recovery skips it during the undo phase).
-    //    TXN_END does not need to be flushed immediately.
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        lsn_t last_lsn = txn->get_prev_lsn();
-        LogRecord end_rec(txn_id, last_lsn, LogRecordType::TXN_END);
-        log_manager_->append(end_rec);
-        att_.erase(txn_id);
-        // txn is now destroyed — do not dereference it after this point.
-    }
+    // 3. Write TXN_END and erase from ATT under the SAME lock so that
+    //    get_att_snapshot() never sees a committed txn as still active.
+    LogRecord end_rec(txn_id, commit_lsn, LogRecordType::TXN_END);
+    log_manager_->append(end_rec);
+    att_.erase(txn_id);
+    // txn is now destroyed — do not dereference it after this point.
 }
 
 // ─── abort ───────────────────────────────────────────────────────────────────
@@ -127,10 +124,6 @@ void TransactionManager::abort(Transaction* txn) {
                 }
 
                 // Write a CLR to record this undo step.
-                // CLR layout:
-                //   old_data = {} (empty — CLRs are never themselves undone)
-                //   new_data = old_data of the UPDATE (the value we just restored)
-                //   undo_next_lsn = rec.get_prev_lsn()  → next record to process
                 LogRecord clr(txn_id, txn->get_prev_lsn(),
                               rec.get_page_id(), rec.get_slot_id(),
                               /*old_data=*/{},
@@ -139,8 +132,6 @@ void TransactionManager::abort(Transaction* txn) {
                 lsn_t clr_lsn = log_manager_->append(clr);
                 txn->set_prev_lsn(clr_lsn);
 
-                // Stamp the page with the CLR's LSN so recovery knows this
-                // page was modified at this point in the log.
                 page->set_page_lsn(clr_lsn);
                 buffer_manager_->unpin_page(rec.get_page_id(), /*is_dirty=*/true);
             }
@@ -161,7 +152,8 @@ void TransactionManager::abort(Transaction* txn) {
         }
     }
 
-    // 3. Write TXN_END and remove from ATT.
+    // 3. Write TXN_END and remove from ATT under the lock so
+    //    get_att_snapshot() never sees a stale entry.
     {
         std::lock_guard<std::mutex> lock(mutex_);
         lsn_t last_lsn = txn->get_prev_lsn();

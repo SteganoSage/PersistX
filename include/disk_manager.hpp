@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <string>
+#include <mutex>
 #include "common.hpp"
 
 
@@ -11,6 +12,8 @@
  * Reads and writes fixed-size pages to a single file. The disk manager
  * knows nothing about page layout, records, or B+ trees — it only handles
  * bytes on disk.
+ *
+ * Thread safety: all public methods are protected by dm_mutex_.
  */
 class DiskManager {
 public:
@@ -28,7 +31,6 @@ public:
 
     page_id_t allocate_page();
 
-
     size_t get_num_pages() const;
 
     bool flush();
@@ -37,4 +39,5 @@ private:
     std::string file_path_;
     std::fstream file_stream_;
     page_id_t next_page_id_{0};
+    mutable std::mutex dm_mutex_;
 };

@@ -82,6 +82,12 @@ public:
                                           uint16_t       size,
                                           lsn_t          lsn = 0);
 
+    // Recovery-only insert: forces the record into a specific slot_id so redo
+    // reproduces the exact physical state of the original operation.
+    // Normal code should NEVER call this — use insert_record() instead.
+    slot_id_t redo_insert(slot_id_t target_slot, const uint8_t* data,
+                          uint16_t size, lsn_t lsn);
+
     // Read record into `out`. Size comes from the page — caller supplies none.
     // FIX #4: validates offset + length stays within PAGE_SIZE bounds.
     // FIX #2: cross-checks on-disk size prefix against slot directory length.

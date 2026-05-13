@@ -83,7 +83,10 @@ Page* BufferManager::fetch_page(page_id_t page_id) {
         if (dirty_[frame_id]) {
             // WAL rule: flush log before writing the dirty page to disk.
             enforce_wal(frame_id);
-            disk_manager_->write_page(page_ids_[frame_id], pages_[frame_id].raw());
+            if (!disk_manager_->write_page(page_ids_[frame_id], pages_[frame_id].raw())) {
+                // Write failed — cannot evict this frame safely.
+                return nullptr;
+            }
             dirty_[frame_id] = false;
         }
         page_table_.erase(page_ids_[frame_id]);
@@ -131,7 +134,7 @@ bool BufferManager::flush_page(page_id_t page_id) {
     frame_id_t frame_id = it->second;
     // WAL rule: log must be ahead of the page on disk.
     enforce_wal(frame_id);
-    disk_manager_->write_page(page_id, pages_[frame_id].raw());
+    if (!disk_manager_->write_page(page_id, pages_[frame_id].raw())) return false;
     dirty_[frame_id] = false;
     return true;
 }
@@ -165,7 +168,9 @@ Page* BufferManager::new_page(page_id_t& page_id) {
         if (dirty_[frame_id]) {
             // WAL rule before evicting a dirty frame.
             enforce_wal(frame_id);
-            disk_manager_->write_page(page_ids_[frame_id], pages_[frame_id].raw());
+            if (!disk_manager_->write_page(page_ids_[frame_id], pages_[frame_id].raw())) {
+                return nullptr;
+            }
             dirty_[frame_id] = false;
         }
         page_table_.erase(page_ids_[frame_id]);
