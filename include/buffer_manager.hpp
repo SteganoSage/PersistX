@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <list>
 #include <mutex>
+#include <vector>
 
 class BufferManager {
 public:
@@ -31,6 +32,19 @@ public:
     bool  delete_page(page_id_t page_id);
 
     std::vector<std::pair<page_id_t, lsn_t>> get_dirty_pages();
+
+    // ── introspection (for CLI shell) ─────────────────────────────────────────
+
+    struct FrameInfo {
+        frame_id_t frame_id;
+        page_id_t  page_id;      // INVALID_PAGE_ID if free
+        int32_t    pin_count;
+        bool       dirty;
+        lsn_t      page_lsn;
+    };
+
+    std::vector<FrameInfo> get_frame_info() const;
+    size_t get_pool_size() const { return pool_size_; }
 
 private:
     // ── WAL helper ────────────────────────────────────────────────────────────

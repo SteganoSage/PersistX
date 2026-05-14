@@ -218,3 +218,29 @@ std::vector<std::pair<page_id_t, lsn_t>> BufferManager::get_dirty_pages() {
     }
     return dirty_pages;
 }
+
+// ─── get_frame_info ──────────────────────────────────────────────────────────
+// Returns a snapshot of every frame for the CLI's `buffer` command.
+
+std::vector<BufferManager::FrameInfo> BufferManager::get_frame_info() const {
+    // Note: caller should not hold bm_mutex_. We cast away const for the lock
+    // because this is a read-only snapshot — a minor const concession for the
+    // CLI introspection use-case.
+    auto& self = const_cast<BufferManager&>(*this);
+    std::lock_guard<std::mutex> lock(self.bm_mutex_);
+
+    std::vector<FrameInfo> info;
+    info.reserve(pool_size_);
+
+    for (size_t i = 0; i < pool_size_; ++i) {
+        FrameInfo fi;
+        fi.frame_id  = static_cast<frame_id_t>(i);
+        fi.page_id   = page_ids_[i];
+        fi.pin_count = pin_count_[i];
+        fi.dirty     = dirty_[i];
+        fi.page_lsn  = (page_ids_[i] != INVALID_PAGE_ID)
+                            ? pages_[i].get_page_lsn() : INVALID_LSN;
+        info.push_back(fi);
+    }
+    return info;
+}

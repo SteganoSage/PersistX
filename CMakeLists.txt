@@ -31,6 +31,9 @@ add_library(persistx_lib
     src/recovery_manager.cpp        # Phase 9
     src/btree_page.cpp
     src/btree_index.cpp
+    src/terminal.cpp
+    src/shell.cpp
+    src/shell_commands.cpp
 )
 
 target_include_directories(persistx_lib PUBLIC include)
@@ -38,6 +41,11 @@ target_include_directories(persistx_lib PUBLIC include)
 # Link pthreads — required for std::mutex on Linux.
 find_package(Threads REQUIRED)
 target_link_libraries(persistx_lib PUBLIC Threads::Threads)
+
+# ─── PersistX interactive shell ──────────────────────────────────────────────
+
+add_executable(persistx src/main.cpp)
+target_link_libraries(persistx PRIVATE persistx_lib)
 
 # ─── existing test executables ────────────────────────────────────────────────
 

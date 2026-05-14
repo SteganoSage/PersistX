@@ -467,3 +467,107 @@ void BTreeIndex::insert_into_parent(page_id_t left_pid, int64_t key,
     // Recurse: push parent_push_key further up the tree.
     insert_into_parent(parent_pid, parent_push_key, new_parent_pid);
 }
+
+// ─── get_stats ───────────────────────────────────────────────────────────────
+// BFS traversal to count height, internal/leaf pages, and total keys.
+
+BTreeIndex::TreeStats BTreeIndex::get_stats() {
+    TreeStats stats{0, 0, 0, 0};
+    if (root_page_id_ == INVALID_PAGE_ID) return stats;
+
+    std::queue<page_id_t> q;
+    q.push(root_page_id_);
+
+    while (!q.empty()) {
+        size_t level_size = q.size();
+        ++stats.height;
+
+        for (size_t i = 0; i < level_size; ++i) {
+            page_id_t pid = q.front();
+            q.pop();
+
+            Page* page = bm_->fetch_page(pid);
+            if (!page) continue;
+
+            uint8_t node_type;
+            std::memcpy(&node_type, page->raw() + 4, sizeof(node_type));
+
+            uint16_t num_keys;
+            std::memcpy(&num_keys, page->raw() + 5, sizeof(num_keys));
+
+            stats.total_keys += num_keys;
+
+            if (node_type == BTREE_NODE_LEAF) {
+                ++stats.leaf_pages;
+                bm_->unpin_page(pid, false);
+            } else {
+                ++stats.internal_pages;
+                BTreeInternalPage internal(page);
+                for (uint16_t c = 0; c <= num_keys; ++c) {
+                    q.push(internal.get_child_at(c));
+                }
+                bm_->unpin_page(pid, false);
+            }
+        }
+    }
+
+    return stats;
+}
+
+// ─── get_tree_layout ─────────────────────────────────────────────────────────
+// BFS that returns a snapshot of every node, level by level.
+
+std::vector<std::vector<BTreeIndex::NodeInfo>> BTreeIndex::get_tree_layout() {
+    std::vector<std::vector<NodeInfo>> levels;
+    if (root_page_id_ == INVALID_PAGE_ID) return levels;
+
+    std::queue<page_id_t> q;
+    q.push(root_page_id_);
+
+    while (!q.empty()) {
+        size_t level_size = q.size();
+        std::vector<NodeInfo> level;
+
+        for (size_t i = 0; i < level_size; ++i) {
+            page_id_t pid = q.front();
+            q.pop();
+
+            Page* page = bm_->fetch_page(pid);
+            if (!page) continue;
+
+            uint8_t node_type;
+            std::memcpy(&node_type, page->raw() + 4, sizeof(node_type));
+
+            uint16_t num_keys;
+            std::memcpy(&num_keys, page->raw() + 5, sizeof(num_keys));
+
+            NodeInfo info;
+            info.page_id = pid;
+            info.is_leaf = (node_type == BTREE_NODE_LEAF);
+
+            if (info.is_leaf) {
+                BTreeLeafPage leaf(page);
+                for (uint16_t k = 0; k < num_keys; ++k) {
+                    info.keys.push_back(leaf.get_key_at(k));
+                }
+            } else {
+                BTreeInternalPage internal(page);
+                for (uint16_t k = 0; k < num_keys; ++k) {
+                    info.keys.push_back(internal.get_key_at(k));
+                }
+                for (uint16_t c = 0; c <= num_keys; ++c) {
+                    page_id_t child = internal.get_child_at(c);
+                    info.children.push_back(child);
+                    q.push(child);
+                }
+            }
+
+            bm_->unpin_page(pid, false);
+            level.push_back(std::move(info));
+        }
+
+        levels.push_back(std::move(level));
+    }
+
+    return levels;
+}

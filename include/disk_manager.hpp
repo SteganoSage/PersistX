@@ -33,6 +33,8 @@ public:
 
     size_t get_num_pages() const;
 
+    void set_num_pages(page_id_t n);
+
     bool flush();
 
 private:

@@ -19,6 +19,8 @@
 #include "buffer_manager.hpp"
 #include "btree_page.hpp"
 #include <vector>
+#include <string>
+#include <queue>
 
 class BTreeIndex {
 public:
@@ -55,6 +57,29 @@ public:
     // ── accessors ─────────────────────────────────────────────────────────────
 
     page_id_t get_root_page_id() const { return root_page_id_; }
+
+    // ── introspection (for CLI visualization) ─────────────────────────────────
+
+    struct TreeStats {
+        uint32_t height;
+        uint32_t internal_pages;
+        uint32_t leaf_pages;
+        uint64_t total_keys;
+    };
+
+    struct NodeInfo {
+        page_id_t page_id;
+        bool is_leaf;
+        std::vector<int64_t> keys;
+        std::vector<page_id_t> children;  // empty for leaves
+    };
+
+    // Compute tree statistics by traversing the entire tree.
+    TreeStats get_stats();
+
+    // Level-order traversal for visualization.
+    // Returns a vector of levels; each level is a vector of NodeInfo.
+    std::vector<std::vector<NodeInfo>> get_tree_layout();
 
 private:
     BufferManager* bm_;

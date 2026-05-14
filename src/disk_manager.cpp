@@ -81,6 +81,11 @@ size_t DiskManager::get_num_pages() const {
     return next_page_id_;
 }
 
+void DiskManager::set_num_pages(page_id_t n) {
+    std::lock_guard<std::mutex> lock(dm_mutex_);
+    if (n > next_page_id_) next_page_id_ = n;
+}
+
 bool DiskManager::flush(){
     std::lock_guard<std::mutex> lock(dm_mutex_);
     file_stream_.flush();
