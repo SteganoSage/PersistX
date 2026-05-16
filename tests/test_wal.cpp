@@ -69,7 +69,7 @@ int main() {
         LogRecord rec(/*txn_id=*/5, /*prev_lsn=*/10,
                       /*page_id=*/7, /*slot_id=*/1,
                       old_data, new_data,
-                      /*undo_next_lsn=*/3);
+                      /*undo_next_lsn=*/(lsn_t)3);
         rec.set_lsn(15);
 
         auto bytes = rec.serialize();

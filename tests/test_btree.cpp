@@ -5,8 +5,6 @@
 #include <iostream>
 #include <cstdio>
 
-// ─── tiny helper ─────────────────────────────────────────────────────────────
-
 static void pass(const char* name) {
     std::cout << "[PASS] " << name << "\n";
 }

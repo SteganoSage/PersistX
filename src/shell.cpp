@@ -21,9 +21,13 @@ void Shell::init_storage() {
     disk_mgr_ = new DiskManager(db_path_ + ".db");
     log_mgr_  = new LogManager(db_path_ + ".log");
     buf_mgr_  = new BufferManager(disk_mgr_, log_mgr_, POOL_SIZE);
-    txn_mgr_  = new TransactionManager(log_mgr_, buf_mgr_);
-    ckpt_mgr_ = new CheckpointManager(log_mgr_, buf_mgr_, txn_mgr_);
+
+    // index_ must be allocated BEFORE txn_mgr_ so we can pass the pointer in.
+    // Note: index_->create() or index_->load() is called below after the WAL
+    // check — the BTreeIndex object itself is valid as soon as it's constructed.
     index_    = new BTreeIndex(buf_mgr_);
+    txn_mgr_  = new TransactionManager(log_mgr_, buf_mgr_, index_);
+    ckpt_mgr_ = new CheckpointManager(log_mgr_, buf_mgr_, txn_mgr_);
 
     // Check if WAL has records — if so, this is a restart (clean or crash)
     auto wal_records = log_mgr_->read_log();
@@ -280,12 +284,13 @@ void Shell::cmd_put(const std::vector<std::string>& args) {
         return;
     }
 
-    // Step 3: WAL — log the data page modification
+    // Step 3: WAL — log the data page modification.
+    // Pass index_key so abort() can remove the ghost B+ tree entry if this
+    // transaction is rolled back (fixes Bug #6 — ghost index entries).
     std::vector<uint8_t> old_data;  // empty — this was an insert
     lsn_t lsn = txn_mgr_->log_update(active_txn_, rid.page_id, rid.slot_id,
-                                       old_data, record);
+                                       old_data, record, key);
     // Flush WAL to disk immediately — write-ahead guarantee.
-    // This ensures the log record survives a crash even without commit.
     log_mgr_->flush(lsn);
 
     // Step 4: Stamp the page with the LSN
@@ -364,8 +369,7 @@ void Shell::cmd_del(const std::vector<std::string>& args) {
 
     // Step 4: WAL log
     std::vector<uint8_t> new_data;  // empty — this was a delete
-    lsn_t lsn = txn_mgr_->log_update(active_txn_, rid.page_id, rid.slot_id,
-                                       old_data, new_data);
+    lsn_t lsn = txn_mgr_->log_update(active_txn_, rid.page_id, rid.slot_id, old_data, new_data,key);
     log_mgr_->flush(lsn);
 
     // Step 5: Stamp page LSN
@@ -408,13 +412,28 @@ void Shell::cmd_scan(const std::vector<std::string>& args) {
     std::vector<std::vector<std::string>> rows;
 
     for (auto& rid : rids) {
-        std::string val = fetch_value(rid);
+        // Read raw record so we can extract both key and value in one fetch.
+        // Previously the key column was hardcoded to "-" (Bug #3) because
+        // fetch_value() only returns the value portion of the record.
+        Page* page = buf_mgr_->fetch_page(rid.page_id);
+        if (!page) continue;
+
+        std::vector<uint8_t> data;
+        if (!page->read_record(rid.slot_id, data)) {
+            buf_mgr_->unpin_page(rid.page_id, false);
+            continue;
+        }
+        buf_mgr_->unpin_page(rid.page_id, false);
+
+        std::string key_str = std::to_string(record_key(data));
+        std::string val     = record_value(data);
         std::string rid_str = std::to_string(rid.page_id) + ":" + std::to_string(rid.slot_id);
-        rows.push_back({"-", val, rid_str});
+        rows.push_back({key_str, val, rid_str});
     }
+
     std::cout << "\n";
     term::print_table(headers, rows);
-    std::cout << "  " << term::dim(std::to_string(rids.size()) + " rows") << "\n\n";
+    std::cout << "  " << term::dim(std::to_string(rows.size()) + " rows") << "\n\n";
 }
 
 void Shell::cmd_update(const std::vector<std::string>& args) {

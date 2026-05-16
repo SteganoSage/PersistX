@@ -5,6 +5,7 @@
 #include "log_manager.hpp"
 #include "log_record.hpp"
 #include "buffer_manager.hpp"
+#include "btree_index.hpp"
 #include <unordered_map>
 #include <memory>
 #include <mutex>
@@ -37,7 +38,7 @@
 
 class TransactionManager {
 public:
-    TransactionManager(LogManager* log_manager, BufferManager* buffer_manager);
+    TransactionManager(LogManager* log_manager, BufferManager* buffer_manager, BTreeIndex* btree_index= nullptr);
 
     ~TransactionManager() = default;
 
@@ -69,16 +70,24 @@ public:
     //   2. Modifying the page (e.g. via page->update_record()).
     //   3. Calling log_update() to record the change.
     //   4. Setting page->set_page_lsn(returned_lsn) to stamp the page.
+    //
+    // index_key: the B+ tree key associated with this operation. Must be
+    //   supplied for INSERT (old_data empty) and DELETE (new_data empty) so
+    //   that abort() can remove ghost index entries. Pass 0 for pure in-place
+    //   UPDATEs that do not change the key.
+    //
     // Returns the LSN of the UPDATE record.
-    lsn_t log_update(Transaction*               txn,
-                     page_id_t                  page_id,
-                     slot_id_t                  slot_id,
+    lsn_t log_update(Transaction*                txn,
+                     page_id_t                   page_id,
+                     slot_id_t                   slot_id,
                      const std::vector<uint8_t>& old_data,
-                     const std::vector<uint8_t>& new_data);
+                     const std::vector<uint8_t>& new_data,
+                     int64_t                     index_key = 0);
 
 private:
     LogManager*    log_manager_;
     BufferManager* buffer_manager_;
+    BTreeIndex*    btree_index_;      // needed by abort() to undo index entries
 
     // Active Transaction Table: txn_id → Transaction object (owned here).
     std::unordered_map<txn_id_t, std::unique_ptr<Transaction>> att_;

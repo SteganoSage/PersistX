@@ -92,7 +92,7 @@ uint16_t BTreeLeafPage::key_index(int64_t key) const {
     uint16_t hi = get_num_keys();
 
     while (lo < hi) {
-        uint16_t mid = (lo + hi) / 2;
+        uint16_t mid = static_cast<uint16_t>(lo + (hi - lo) / 2);
         if (get_key_at(mid) < key)
             lo = mid + 1;
         else

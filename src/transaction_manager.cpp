@@ -4,16 +4,21 @@
 
 // ─── constructor ─────────────────────────────────────────────────────────────
 
-TransactionManager::TransactionManager(LogManager*    log_manager, BufferManager* buffer_manager)
-    : log_manager_(log_manager), 
-    buffer_manager_(buffer_manager)
-{}
+TransactionManager::TransactionManager(LogManager *log_manager,
+                                       BufferManager *buffer_manager,
+                                       BTreeIndex *btree_index)
+    : log_manager_(log_manager),
+      buffer_manager_(buffer_manager),
+      btree_index_(btree_index)
+{
+}
 
 // ─── begin ───────────────────────────────────────────────────────────────────
 // Creates a new Transaction, writes a BEGIN record to the WAL, and adds the
 // transaction to the ATT. Returns a raw (non-owning) pointer.
 
-Transaction* TransactionManager::begin() {
+Transaction *TransactionManager::begin()
+{
     std::lock_guard<std::mutex> lock(mutex_);
 
     txn_id_t txn_id = next_txn_id_++;
@@ -26,7 +31,7 @@ Transaction* TransactionManager::begin() {
     // The BEGIN record's LSN is the first link in the undo chain.
     txn->set_prev_lsn(begin_lsn);
 
-    Transaction* raw_ptr = txn.get();
+    Transaction *raw_ptr = txn.get();
     att_[txn_id] = std::move(txn);
     return raw_ptr;
 }
@@ -36,7 +41,8 @@ Transaction* TransactionManager::begin() {
 // this function returns. Nothing else is written to disk eagerly (No-Force
 // policy) — dirty pages will reach disk later via eviction or checkpoint.
 
-void TransactionManager::commit(Transaction* txn) {
+void TransactionManager::commit(Transaction *txn)
+{
     std::lock_guard<std::mutex> lock(mutex_);
 
     txn_id_t txn_id = txn->get_txn_id();
@@ -67,7 +73,13 @@ void TransactionManager::commit(Transaction* txn) {
 // For each UPDATE record found in the undo chain:
 //   1. Fetch the affected page.
 //   2. Restore the before-image (overwrite slot with old_data).
-//   3. Write a CLR (Compensation Log Record) that describes the undo step and
+//   3. If old_data is empty, the UPDATE was an INSERT — undo requires:
+//        a. Deleting the heap record (page->delete_record).
+//        b. Removing the B+ tree index entry (btree_index_->remove).
+//      Without (b), the index retains a ghost entry pointing to a deleted
+//      slot, causing duplicate-key errors on subsequent inserts and
+//      returning stale data on index scans.
+//   4. Write a CLR (Compensation Log Record) that describes the undo step and
 //      carries an undo_next_lsn pointing to the NEXT record to undo.
 //      This makes abort idempotent across crashes: if recovery encounters a
 //      CLR it knows that UPDATE has already been undone, and jumps directly
@@ -75,7 +87,8 @@ void TransactionManager::commit(Transaction* txn) {
 //
 // The undo chain terminates at the BEGIN record (which has no data to undo).
 
-void TransactionManager::abort(Transaction* txn) {
+void TransactionManager::abort(Transaction *txn)
+{
     txn_id_t txn_id = txn->get_txn_id();
 
     // 1. Save the undo starting point BEFORE writing the ABORT record.
@@ -88,39 +101,73 @@ void TransactionManager::abort(Transaction* txn) {
     txn->set_prev_lsn(abort_lsn);
     txn->set_state(TxnState::ABORTED);
 
-    while (undo_lsn != INVALID_LSN) {
+    while (undo_lsn != INVALID_LSN)
+    {
         // read_record_at_lsn flushes the in-memory buffer first so the record
         // is guaranteed to be on disk before we try to read it.
         LogRecord rec = log_manager_->read_record_at_lsn(undo_lsn);
 
-        if (rec.get_type() == LogRecordType::INVALID) {
+        if (rec.get_type() == LogRecordType::INVALID)
+        {
             // Should never happen — bail out safely.
             break;
         }
 
-        if (rec.get_type() == LogRecordType::BEGIN) {
+        if (rec.get_type() == LogRecordType::BEGIN)
+        {
             // Reached the start of this transaction — nothing left to undo.
             break;
         }
 
-        if (rec.get_type() == LogRecordType::UPDATE) {
+        if (rec.get_type() == LogRecordType::UPDATE)
+        {
             // ── undo one data modification ───────────────────────────────────
 
-            Page* page = buffer_manager_->fetch_page(rec.get_page_id());
-            if (page != nullptr) {
-                const std::vector<uint8_t>& old_data = rec.get_old_tuple_data();
+            Page *page = buffer_manager_->fetch_page(rec.get_page_id());
+            if (page != nullptr)
+            {
+                const std::vector<uint8_t> &old_data = rec.get_old_tuple_data();
 
-                // Restore the before-image.
-                // If old_data is empty, this UPDATE was an INSERT — undo is a delete.
-                // Otherwise, overwrite with the before-image.
-                if (old_data.empty()) {
+                if (old_data.empty())
+                {
+                    // ── INSERT undo ──────────────────────────────────────────────────
                     page->delete_record(rec.get_slot_id(), 0);
-                } else {
+                    if (btree_index_ != nullptr)
+                        btree_index_->remove(rec.get_index_key());
+                }
+                else if (rec.get_new_tuple_data().empty())
+                {
+                    // ── DELETE undo ──────────────────────────────────────────────────
+                    // Slot is currently a tombstone; redo_insert forces the before-image
+                    // back into the exact same slot so the RID stays stable.
+                    page->redo_insert(rec.get_slot_id(),
+                                      old_data.data(),
+                                      static_cast<uint16_t>(old_data.size()), 0);
+                    // Re-insert index entry (key was logged by cmd_del after Bug B fix).
+                    if (btree_index_ != nullptr)
+                    {
+                        RID rid{rec.get_page_id(), rec.get_slot_id()};
+                        btree_index_->insert(rec.get_index_key(), rid);
+                    }
+                }
+                else
+                {
+                    // ── UPDATE undo ──────────────────────────────────────────────────
+                    // Slot is still live — restore before-image.
+                    // update_record requires the new size to match the current slot size.
+                    // When the UPDATE changed the value length (e.g. "six-hundred" → "modified"),
+                    // the slot is now smaller and update_record returns false.  In that case,
+                    // delete the slot and force the before-image back in at the same slot_id.
                     bool ok = page->update_record(rec.get_slot_id(),
-                                        old_data.data(),
-                                        static_cast<uint16_t>(old_data.size()),
-                                        0 /* lsn — will stamp via set_page_lsn below */);
-                    assert(ok && "abort: update_record failed — before-image size mismatch");
+                                                  old_data.data(),
+                                                  static_cast<uint16_t>(old_data.size()), 0);
+                    if (!ok)
+                    {
+                        page->delete_record(rec.get_slot_id(), 0);
+                        page->redo_insert(rec.get_slot_id(),
+                                          old_data.data(),
+                                          static_cast<uint16_t>(old_data.size()), 0);
+                    }
                 }
 
                 // Write a CLR to record this undo step.
@@ -138,14 +185,16 @@ void TransactionManager::abort(Transaction* txn) {
 
             // Follow the UPDATE's prev chain to the next record to undo.
             undo_lsn = rec.get_prev_lsn();
-
-        } else if (rec.get_type() == LogRecordType::CLR) {
+        }
+        else if (rec.get_type() == LogRecordType::CLR)
+        {
             // This record was already written during a previous (interrupted)
             // abort attempt. Jump to undo_next_lsn to skip the already-undone
             // UPDATE — never undo the same step twice.
             undo_lsn = rec.get_undo_next_lsn();
-
-        } else {
+        }
+        else
+        {
             // ABORT, COMMIT, or other bookkeeping records — not data
             // modifications, nothing to undo. Just follow the chain.
             undo_lsn = rec.get_prev_lsn();
@@ -168,26 +217,38 @@ void TransactionManager::abort(Transaction* txn) {
 // Records a data modification in the WAL and advances the transaction's
 // prevLSN to the new record. Does NOT modify the page — the caller does that.
 //
+// index_key must be supplied for INSERT (old_data empty) and DELETE
+// (new_data empty) so abort() can remove the corresponding B+ tree entry.
+// For pure in-place value updates that don't change the key, pass 0.
+//
 // Typical caller sequence:
-//   1. read_record(slot, old_data)      — capture before-image
-//   2. update_record(slot, new_data)    — modify the page
-//   3. lsn = tm.log_update(...)         — record the change in the WAL
-//   4. page->set_page_lsn(lsn)          — stamp the page
+//   1. read_record(slot, old_data)           — capture before-image
+//   2. update_record(slot, new_data)         — modify the page
+//   3. lsn = tm.log_update(..., index_key)   — record the change in the WAL
+//   4. page->set_page_lsn(lsn)              — stamp the page
 
-lsn_t TransactionManager::log_update(Transaction* txn, page_id_t page_id, slot_id_t slot_id, 
-    const std::vector<uint8_t>& old_data, const std::vector<uint8_t>& new_data) {
+lsn_t TransactionManager::log_update(Transaction *txn,
+                                     page_id_t page_id,
+                                     slot_id_t slot_id,
+                                     const std::vector<uint8_t> &old_data,
+                                     const std::vector<uint8_t> &new_data,
+                                     int64_t index_key)
+{
     LogRecord rec(txn->get_txn_id(), txn->get_prev_lsn(),
                   page_id, slot_id,
-                  old_data, new_data);
+                  old_data, new_data,
+                  index_key);
     lsn_t lsn = log_manager_->append(rec);
     txn->set_prev_lsn(lsn);
     return lsn;
 }
 
-std::vector<std::pair<txn_id_t, lsn_t>> TransactionManager::get_att_snapshot() {
+std::vector<std::pair<txn_id_t, lsn_t>> TransactionManager::get_att_snapshot()
+{
     std::lock_guard<std::mutex> lock(mutex_);
     std::vector<std::pair<txn_id_t, lsn_t>> snapshot;
-    for (const auto& [txn_id, txn] : att_) {
+    for (const auto &[txn_id, txn] : att_)
+    {
         snapshot.emplace_back(txn_id, txn->get_prev_lsn());
     }
     return snapshot;

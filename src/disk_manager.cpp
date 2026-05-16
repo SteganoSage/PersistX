@@ -32,8 +32,16 @@ DiskManager::DiskManager(const std::string& file_path) {
     }
 
     file_stream_.seekg(0, std::ios::end);
-    auto file_size = file_stream_.tellg();
-    next_page_id_ = static_cast<page_id_t>(file_size / PAGE_SIZE);
+
+    // FIX: tellg() returns std::streamoff which is signed — it returns -1 on
+    // error (e.g. the stream is in a bad state right after creation on some
+    // platforms). Guard against negative values before casting to unsigned
+    // page_id_t, otherwise next_page_id_ wraps to a huge number and every
+    // subsequent allocate_page() produces garbage IDs.
+    std::streamoff file_size = file_stream_.tellg();
+    if (file_size < 0) file_size = 0;
+    next_page_id_ = static_cast<page_id_t>(
+        static_cast<uint64_t>(file_size) / PAGE_SIZE);
 }
 
 DiskManager::~DiskManager() {
@@ -48,9 +56,16 @@ bool DiskManager::read_page(page_id_t page_id, uint8_t* dest) {
     auto offset = static_cast<uint64_t>(page_id) * PAGE_SIZE;
     file_stream_.seekg(static_cast<std::streamoff>(offset));
     file_stream_.read(reinterpret_cast<char*>(dest), PAGE_SIZE);
-    auto bytes_read = file_stream_.gcount();
-    if (bytes_read < PAGE_SIZE){
-        std::memset(dest+bytes_read,0,PAGE_SIZE-bytes_read);
+
+    // FIX: gcount() returns std::streamsize (signed). The old code compared
+    // it directly to PAGE_SIZE (size_t, unsigned) — if the stream is in a
+    // bad state and gcount() returns -1, the unsigned comparison passes and
+    // we'd call memset with a massive length, corrupting the buffer.
+    // Guard: treat negative gcount as 0 bytes read.
+    std::streamsize bytes_read = file_stream_.gcount();
+    if (bytes_read < static_cast<std::streamsize>(PAGE_SIZE)) {
+        size_t got = (bytes_read > 0) ? static_cast<size_t>(bytes_read) : 0;
+        std::memset(dest + got, 0, PAGE_SIZE - got);
         file_stream_.clear();
     }
     return true;

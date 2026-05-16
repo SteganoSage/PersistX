@@ -4,10 +4,10 @@
 #include <vector>
 #include <cstring>
 
-class LogRecord{
+class LogRecord
+{
 
 public:
-
     // Constructor 1: Default -- creates an INVALID record (used by deserialization)
     LogRecord() = default;
 
@@ -24,6 +24,21 @@ public:
           page_id_(page_id), slot_id_(slot_id),
           old_tuple_data_(std::move(old_data)),
           new_tuple_data_(std::move(new_data)) {}
+
+    // Constructor 3b: UPDATE with index key (used for INSERT/DELETE ops)
+    // Constructor 3b: UPDATE with index key -- used for INSERT/DELETE ops so
+    // that abort() can remove the ghost B+ tree entry without rescanning the heap.
+    LogRecord(txn_id_t txn_id, lsn_t prev_lsn,
+              page_id_t page_id, slot_id_t slot_id,
+              std::vector<uint8_t> old_data, std::vector<uint8_t> new_data,
+              int64_t index_key)
+        : txn_id_(txn_id), prev_lsn_(prev_lsn), type_(LogRecordType::UPDATE),
+          page_id_(page_id), slot_id_(slot_id),
+          index_key_(index_key), // ← moved before old/new_tuple_data_
+          old_tuple_data_(std::move(old_data)),
+          new_tuple_data_(std::move(new_data))
+    {
+    }
 
     // Constructor 4: CLR -- same as UPDATE but with undo_next_lsn for recovery
     LogRecord(txn_id_t txn_id, lsn_t prev_lsn,
@@ -48,16 +63,17 @@ public:
 
     // --- Getters ---
 
-    lsn_t         get_lsn()        const { return lsn_; }
-    txn_id_t      get_txn_id()     const { return txn_id_; }
-    lsn_t         get_prev_lsn()   const { return prev_lsn_; }
-    LogRecordType get_type()       const { return type_; }
-    page_id_t     get_page_id()    const { return page_id_; }
-    slot_id_t     get_slot_id()    const { return slot_id_; }
-    lsn_t         get_undo_next_lsn() const { return undo_next_lsn_; }
+    lsn_t get_lsn() const { return lsn_; }
+    txn_id_t get_txn_id() const { return txn_id_; }
+    lsn_t get_prev_lsn() const { return prev_lsn_; }
+    LogRecordType get_type() const { return type_; }
+    page_id_t get_page_id() const { return page_id_; }
+    slot_id_t get_slot_id() const { return slot_id_; }
+    int64_t get_index_key() const { return index_key_; }
+    lsn_t get_undo_next_lsn() const { return undo_next_lsn_; }
 
-    const std::vector<uint8_t>& get_old_tuple_data() const { return old_tuple_data_; }
-    const std::vector<uint8_t>& get_new_tuple_data() const { return new_tuple_data_; }
+    const std::vector<uint8_t> &get_old_tuple_data() const { return old_tuple_data_; }
+    const std::vector<uint8_t> &get_new_tuple_data() const { return new_tuple_data_; }
 
     // --- Setter for LSN (assigned by LogManager at append time) ---
 
@@ -70,142 +86,134 @@ public:
     //   UPDATE adds: [4] page_id  [2] slot_id  [4] old_size  [N] old_data  [4] new_size  [M] new_data
     //   CLR adds:    same as UPDATE  +  [8] undo_next_lsn
 
-    std::vector<uint8_t> serialize() const {
-        // Step 1: compute total size
-        const uint32_t HEADER_SIZE = 4 + 8 + 8 + 8 + 1;  // total_size + lsn + txn_id + prev_lsn + type
+    std::vector<uint8_t> serialize() const
+    {
+        const uint32_t HEADER_SIZE = 4 + 8 + 8 + 8 + 1;
         uint32_t total_size = HEADER_SIZE;
 
-        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR || type_ == LogRecordType::CHECKPOINT_END) {
-            total_size += 4;  // page_id
-            total_size += 2;  // slot_id
-            total_size += 4;  // old_data length
-            total_size += static_cast<uint32_t>(old_tuple_data_.size());
-            total_size += 4;  // new_data length
-            total_size += static_cast<uint32_t>(new_tuple_data_.size());
+        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR || type_ == LogRecordType::CHECKPOINT_END)
+        {
+            total_size += 4 + 2; // page_id, slot_id
+            total_size += 4 + static_cast<uint32_t>(old_tuple_data_.size());
+            total_size += 4 + static_cast<uint32_t>(new_tuple_data_.size());
         }
-        if (type_ == LogRecordType::CLR) {
-            total_size += 8;  // undo_next_lsn
+        if (type_ == LogRecordType::UPDATE)
+        {
+            total_size += 8; // index_key  ← ADD THIS
+        }
+        if (type_ == LogRecordType::CLR)
+        {
+            total_size += 8; // undo_next_lsn
         }
 
-        // Step 2: allocate the buffer
         std::vector<uint8_t> buf(total_size);
         uint32_t offset = 0;
 
-        // Step 3: write the header
-        std::memcpy(&buf[offset], &total_size, sizeof(total_size));
-        offset += sizeof(total_size);
+        // header (unchanged)
+        std::memcpy(&buf[offset], &total_size, 4);
+        offset += 4;
+        std::memcpy(&buf[offset], &lsn_, 8);
+        offset += 8;
+        std::memcpy(&buf[offset], &txn_id_, 8);
+        offset += 8;
+        std::memcpy(&buf[offset], &prev_lsn_, 8);
+        offset += 8;
+        uint8_t tb = static_cast<uint8_t>(type_);
+        std::memcpy(&buf[offset], &tb, 1);
+        offset += 1;
 
-        std::memcpy(&buf[offset], &lsn_, sizeof(lsn_));
-        offset += sizeof(lsn_);
+        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR || type_ == LogRecordType::CHECKPOINT_END)
+        {
+            std::memcpy(&buf[offset], &page_id_, 4);
+            offset += 4;
+            std::memcpy(&buf[offset], &slot_id_, 2);
+            offset += 2;
 
-        std::memcpy(&buf[offset], &txn_id_, sizeof(txn_id_));
-        offset += sizeof(txn_id_);
-
-        std::memcpy(&buf[offset], &prev_lsn_, sizeof(prev_lsn_));
-        offset += sizeof(prev_lsn_);
-
-        uint8_t type_byte = static_cast<uint8_t>(type_);
-        std::memcpy(&buf[offset], &type_byte, sizeof(type_byte));
-        offset += sizeof(type_byte);
-
-        // Step 4: write UPDATE / CLR payload
-        if (type_ == LogRecordType::UPDATE || type_ == LogRecordType::CLR || type_ == LogRecordType::CHECKPOINT_END) {
-            std::memcpy(&buf[offset], &page_id_, sizeof(page_id_));
-            offset += sizeof(page_id_);
-
-            std::memcpy(&buf[offset], &slot_id_, sizeof(slot_id_));
-            offset += sizeof(slot_id_);
-
-            uint32_t old_size = static_cast<uint32_t>(old_tuple_data_.size());
-            std::memcpy(&buf[offset], &old_size, sizeof(old_size));
-            offset += sizeof(old_size);
-
-            if (old_size > 0) {
-                std::memcpy(&buf[offset], old_tuple_data_.data(), old_size);
-                offset += old_size;
+            uint32_t old_sz = static_cast<uint32_t>(old_tuple_data_.size());
+            std::memcpy(&buf[offset], &old_sz, 4);
+            offset += 4;
+            if (old_sz)
+            {
+                std::memcpy(&buf[offset], old_tuple_data_.data(), old_sz);
+                offset += old_sz;
             }
 
-            uint32_t new_size = static_cast<uint32_t>(new_tuple_data_.size());
-            std::memcpy(&buf[offset], &new_size, sizeof(new_size));
-            offset += sizeof(new_size);
-
-            if (new_size > 0) {
-                std::memcpy(&buf[offset], new_tuple_data_.data(), new_size);
-                offset += new_size;
+            uint32_t new_sz = static_cast<uint32_t>(new_tuple_data_.size());
+            std::memcpy(&buf[offset], &new_sz, 4);
+            offset += 4;
+            if (new_sz)
+            {
+                std::memcpy(&buf[offset], new_tuple_data_.data(), new_sz);
+                offset += new_sz;
             }
         }
-
-        // Step 5: write CLR-specific field
-        if (type_ == LogRecordType::CLR) {
-            std::memcpy(&buf[offset], &undo_next_lsn_, sizeof(undo_next_lsn_));
-            offset += sizeof(undo_next_lsn_);
+        if (type_ == LogRecordType::UPDATE)
+        { // ← ADD THIS BLOCK
+            std::memcpy(&buf[offset], &index_key_, 8);
+            offset += 8;
+        }
+        if (type_ == LogRecordType::CLR)
+        {
+            std::memcpy(&buf[offset], &undo_next_lsn_, 8);
+            offset += 8;
         }
 
         return buf;
     }
 
-    // --- Deserialization ---
-    // Reconstructs a LogRecord from a raw byte buffer (read from the WAL file).
-    // The caller passes a pointer to the start of the record and the total size.
-    // Returns a fully populated LogRecord.
-
-    static LogRecord deserialize(const uint8_t* data, uint32_t size) {
+    static LogRecord deserialize(const uint8_t *data, uint32_t size)
+    {
         LogRecord rec;
         uint32_t offset = 0;
 
-        // Skip total_size (we already know it from the caller)
-        uint32_t total_size;
-        std::memcpy(&total_size, &data[offset], sizeof(total_size));
-        offset += sizeof(total_size);
+        offset += 4; // skip total_size
+        std::memcpy(&rec.lsn_, &data[offset], 8);
+        offset += 8;
+        std::memcpy(&rec.txn_id_, &data[offset], 8);
+        offset += 8;
+        std::memcpy(&rec.prev_lsn_, &data[offset], 8);
+        offset += 8;
+        uint8_t tb;
+        std::memcpy(&tb, &data[offset], 1);
+        rec.type_ = static_cast<LogRecordType>(tb);
+        offset += 1;
 
-        // Read header
-        std::memcpy(&rec.lsn_, &data[offset], sizeof(rec.lsn_));
-        offset += sizeof(rec.lsn_);
+        if (rec.type_ == LogRecordType::UPDATE || rec.type_ == LogRecordType::CLR || rec.type_ == LogRecordType::CHECKPOINT_END)
+        {
+            std::memcpy(&rec.page_id_, &data[offset], 4);
+            offset += 4;
+            std::memcpy(&rec.slot_id_, &data[offset], 2);
+            offset += 2;
 
-        std::memcpy(&rec.txn_id_, &data[offset], sizeof(rec.txn_id_));
-        offset += sizeof(rec.txn_id_);
-
-        std::memcpy(&rec.prev_lsn_, &data[offset], sizeof(rec.prev_lsn_));
-        offset += sizeof(rec.prev_lsn_);
-
-        uint8_t type_byte;
-        std::memcpy(&type_byte, &data[offset], sizeof(type_byte));
-        rec.type_ = static_cast<LogRecordType>(type_byte);
-        offset += sizeof(type_byte);
-
-        // Read UPDATE / CLR payload
-        if (rec.type_ == LogRecordType::UPDATE || rec.type_ == LogRecordType::CLR || rec.type_ == LogRecordType::CHECKPOINT_END) {
-            std::memcpy(&rec.page_id_, &data[offset], sizeof(rec.page_id_));
-            offset += sizeof(rec.page_id_);
-
-            std::memcpy(&rec.slot_id_, &data[offset], sizeof(rec.slot_id_));
-            offset += sizeof(rec.slot_id_);
-
-            uint32_t old_size;
-            std::memcpy(&old_size, &data[offset], sizeof(old_size));
-            offset += sizeof(old_size);
-
-            rec.old_tuple_data_.resize(old_size);
-            if (old_size > 0) {
-                std::memcpy(rec.old_tuple_data_.data(), &data[offset], old_size);
-                offset += old_size;
+            uint32_t old_sz;
+            std::memcpy(&old_sz, &data[offset], 4);
+            offset += 4;
+            rec.old_tuple_data_.resize(old_sz);
+            if (old_sz)
+            {
+                std::memcpy(rec.old_tuple_data_.data(), &data[offset], old_sz);
+                offset += old_sz;
             }
 
-            uint32_t new_size;
-            std::memcpy(&new_size, &data[offset], sizeof(new_size));
-            offset += sizeof(new_size);
-
-            rec.new_tuple_data_.resize(new_size);
-            if (new_size > 0) {
-                std::memcpy(rec.new_tuple_data_.data(), &data[offset], new_size);
-                offset += new_size;
+            uint32_t new_sz;
+            std::memcpy(&new_sz, &data[offset], 4);
+            offset += 4;
+            rec.new_tuple_data_.resize(new_sz);
+            if (new_sz)
+            {
+                std::memcpy(rec.new_tuple_data_.data(), &data[offset], new_sz);
+                offset += new_sz;
             }
         }
-
-        // Read CLR-specific field
-        if (rec.type_ == LogRecordType::CLR) {
-            std::memcpy(&rec.undo_next_lsn_, &data[offset], sizeof(rec.undo_next_lsn_));
-            offset += sizeof(rec.undo_next_lsn_);
+        if (rec.type_ == LogRecordType::UPDATE)
+        { // ← ADD THIS BLOCK
+            std::memcpy(&rec.index_key_, &data[offset], 8);
+            offset += 8;
+        }
+        if (rec.type_ == LogRecordType::CLR)
+        {
+            std::memcpy(&rec.undo_next_lsn_, &data[offset], 8);
+            offset += 8;
         }
 
         return rec;
@@ -219,9 +227,9 @@ private:
 
     page_id_t page_id_ = INVALID_PAGE_ID;
     slot_id_t slot_id_ = INVALID_SLOT_ID;
+    int64_t index_key_ = 0; // B+ tree key — stored for INSERT undo
     std::vector<uint8_t> old_tuple_data_;
     std::vector<uint8_t> new_tuple_data_;
 
     lsn_t undo_next_lsn_ = INVALID_LSN;
-
 };

@@ -140,6 +140,16 @@ slot_id_t Page::insert_record(const uint8_t* data, uint16_t size, lsn_t lsn) {
 
 slot_id_t Page::redo_insert(slot_id_t target_slot, const uint8_t* data,
                             uint16_t size, lsn_t lsn) {
+    // 0. Guard: if the page was never flushed to disk its entire buffer is
+    //    zeroed, so free_space_ptr == 0.  Writing at offset 0 would corrupt
+    //    the page header and cause read_record to reject every slot
+    //    (the offset < PAGE_HEADER_SIZE check in read_record).
+    //    slot_count and tombstone_count are already 0 on a zeroed buffer,
+    //    so only the pointer needs correcting here.
+    if (get_free_space_ptr() < static_cast<uint32_t>(PAGE_HEADER_SIZE)) {
+        set_free_space_ptr(static_cast<uint32_t>(PAGE_HEADER_SIZE));
+    }
+
     // 1. Write [size_prefix][payload] at free_space_ptr.
     uint32_t offset = get_free_space_ptr();
     wr_u16(buffer_ + offset, size);

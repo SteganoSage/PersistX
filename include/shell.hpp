@@ -63,6 +63,7 @@ private:
     uint64_t total_scans_   = 0;
     uint64_t total_commits_ = 0;
     uint64_t total_aborts_  = 0;
+    int64_t  next_fill_key_ = 0;
 
     // ── Command handlers ─────────────────────────────────────────────────────
 

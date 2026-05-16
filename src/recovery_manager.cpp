@@ -8,18 +8,21 @@
 // Same binary format that CheckpointManager writes into CHECKPOINT_END records.
 
 static std::vector<std::pair<txn_id_t, lsn_t>>
-deserialize_att(const std::vector<uint8_t>& data) {
+deserialize_att(const std::vector<uint8_t> &data)
+{
     std::vector<std::pair<txn_id_t, lsn_t>> att;
-    if (data.empty()) return att;
+    if (data.empty())
+        return att;
 
     uint32_t offset = 0;
     uint32_t count;
     std::memcpy(&count, &data[offset], sizeof(count));
     offset += sizeof(count);
 
-    for (uint32_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i)
+    {
         txn_id_t tid;
-        lsn_t    lsn;
+        lsn_t lsn;
         std::memcpy(&tid, &data[offset], sizeof(tid));
         offset += sizeof(tid);
         std::memcpy(&lsn, &data[offset], sizeof(lsn));
@@ -30,18 +33,21 @@ deserialize_att(const std::vector<uint8_t>& data) {
 }
 
 static std::vector<std::pair<page_id_t, lsn_t>>
-deserialize_dpt(const std::vector<uint8_t>& data) {
+deserialize_dpt(const std::vector<uint8_t> &data)
+{
     std::vector<std::pair<page_id_t, lsn_t>> dpt;
-    if (data.empty()) return dpt;
+    if (data.empty())
+        return dpt;
 
     uint32_t offset = 0;
     uint32_t count;
     std::memcpy(&count, &data[offset], sizeof(count));
     offset += sizeof(count);
 
-    for (uint32_t i = 0; i < count; ++i) {
+    for (uint32_t i = 0; i < count; ++i)
+    {
         page_id_t pid;
-        lsn_t     lsn;
+        lsn_t lsn;
         std::memcpy(&pid, &data[offset], sizeof(pid));
         offset += sizeof(pid);
         std::memcpy(&lsn, &data[offset], sizeof(lsn));
@@ -53,15 +59,16 @@ deserialize_dpt(const std::vector<uint8_t>& data) {
 
 // ─── constructor ─────────────────────────────────────────────────────────────
 
-RecoveryManager::RecoveryManager(LogManager* log_manager,
-                                 BufferManager* buffer_manager)
+RecoveryManager::RecoveryManager(LogManager *log_manager,
+                                 BufferManager *buffer_manager)
     : log_manager_(log_manager),
       buffer_manager_(buffer_manager) {}
 
 // ─── recover ─────────────────────────────────────────────────────────────────
 // Entry point: runs the three ARIES passes in order.
 
-void RecoveryManager::recover() {
+void RecoveryManager::recover()
+{
     att_.clear();
     dpt_.clear();
     analyze();
@@ -89,69 +96,79 @@ void RecoveryManager::recover() {
 //
 // After analysis, att_ contains only LOSER transactions (never committed).
 
-void RecoveryManager::analyze() {
+void RecoveryManager::analyze()
+{
     auto records = log_manager_->read_log();
-    if (records.empty()) return;
+    if (records.empty())
+        return;
 
     // Step 1: Find the last CHECKPOINT_END and seed ATT/DPT from it.
     size_t start_idx = 0;
-    for (size_t i = records.size(); i > 0; --i) {
-        if (records[i - 1].get_type() == LogRecordType::CHECKPOINT_END) {
-            auto& ckpt = records[i - 1];
+    for (size_t i = records.size(); i > 0; --i)
+    {
+        if (records[i - 1].get_type() == LogRecordType::CHECKPOINT_END)
+        {
+            auto &ckpt = records[i - 1];
 
             // Seed ATT from checkpoint
             auto ckpt_att = deserialize_att(ckpt.get_old_tuple_data());
-            for (auto& [tid, lsn] : ckpt_att) {
+            for (auto &[tid, lsn] : ckpt_att)
+            {
                 att_[tid] = lsn;
             }
 
             // Seed DPT from checkpoint
             auto ckpt_dpt = deserialize_dpt(ckpt.get_new_tuple_data());
-            for (auto& [pid, lsn] : ckpt_dpt) {
+            for (auto &[pid, lsn] : ckpt_dpt)
+            {
                 dpt_[pid] = lsn;
             }
 
-            start_idx = i;  // start scanning AFTER the checkpoint
+            start_idx = i; // start scanning AFTER the checkpoint
             break;
         }
     }
 
     // Step 2: Scan forward from start_idx, updating ATT and DPT.
-    for (size_t i = start_idx; i < records.size(); ++i) {
-        auto& rec = records[i];
+    for (size_t i = start_idx; i < records.size(); ++i)
+    {
+        auto &rec = records[i];
         lsn_t rec_lsn = rec.get_lsn();
         txn_id_t tid = rec.get_txn_id();
 
-        switch (rec.get_type()) {
-            case LogRecordType::BEGIN:
-                att_[tid] = rec_lsn;
-                break;
+        switch (rec.get_type())
+        {
+        case LogRecordType::BEGIN:
+            att_[tid] = rec_lsn;
+            break;
 
-            case LogRecordType::COMMIT:
-            case LogRecordType::TXN_END:
-                att_.erase(tid);
-                break;
+        case LogRecordType::COMMIT:
+        case LogRecordType::TXN_END:
+            att_.erase(tid);
+            break;
 
-            case LogRecordType::UPDATE:
-            case LogRecordType::CLR: {
-                // Update the transaction's lastLSN in the ATT.
-                att_[tid] = rec_lsn;
+        case LogRecordType::UPDATE:
+        case LogRecordType::CLR:
+        {
+            // Update the transaction's lastLSN in the ATT.
+            att_[tid] = rec_lsn;
 
-                // If this page is not in the DPT, add it.
-                // rec_lsn is the earliest dirty LSN for this page.
-                page_id_t pid = rec.get_page_id();
-                if (dpt_.find(pid) == dpt_.end()) {
-                    dpt_[pid] = rec_lsn;
-                }
-                break;
+            // If this page is not in the DPT, add it.
+            // rec_lsn is the earliest dirty LSN for this page.
+            page_id_t pid = rec.get_page_id();
+            if (dpt_.find(pid) == dpt_.end())
+            {
+                dpt_[pid] = rec_lsn;
             }
+            break;
+        }
 
-            case LogRecordType::ABORT:
-                att_[tid] = rec_lsn;
-                break;
+        case LogRecordType::ABORT:
+            att_[tid] = rec_lsn;
+            break;
 
-            default:
-                break;
+        default:
+            break;
         }
     }
 }
@@ -165,49 +182,69 @@ void RecoveryManager::analyze() {
 //   2. L < DPT[P].rec_lsn?     → skip (page was flushed after this change)
 //   3. page.pageLSN >= L?       → skip (change already on disk)
 //   4. Otherwise                → apply new_data to the page
+//
+// FIX: update_record() enforces strict same-size overwrites. If the original
+// UPDATE changed the record length (e.g. "twenty_two" → "modified"), calling
+// update_record() silently returns false and redo does nothing — leaving the
+// old value on disk despite the change being committed. The fix mirrors the
+// undo fix: fall back to delete + redo_insert when sizes differ. Same fix
+// applied to CLR redo for consistency.
 
-void RecoveryManager::redo() {
-    if (dpt_.empty()) return;
+void RecoveryManager::redo()
+{
+    if (dpt_.empty())
+        return;
 
     // Find the smallest rec_lsn across all dirty pages — redo starts here.
     lsn_t start_lsn = INVALID_LSN;
-    for (auto& [pid, rlsn] : dpt_) {
+    for (auto &[pid, rlsn] : dpt_)
+    {
         if (start_lsn == INVALID_LSN || rlsn < start_lsn)
             start_lsn = rlsn;
     }
-    if (start_lsn == INVALID_LSN) return;
+    if (start_lsn == INVALID_LSN)
+        return;
 
     auto records = log_manager_->read_log();
 
-    for (auto& rec : records) {
-        if (rec.get_lsn() < start_lsn) continue;
+    for (auto &rec : records)
+    {
+        if (rec.get_lsn() < start_lsn)
+            continue;
 
         if (rec.get_type() != LogRecordType::UPDATE &&
-            rec.get_type() != LogRecordType::CLR) continue;
+            rec.get_type() != LogRecordType::CLR)
+            continue;
 
         page_id_t pid = rec.get_page_id();
 
         // Check 1: page not in DPT → skip
-        if (dpt_.find(pid) == dpt_.end()) continue;
+        if (dpt_.find(pid) == dpt_.end())
+            continue;
 
         // Check 2: record LSN < page's rec_lsn → skip
-        if (rec.get_lsn() < dpt_[pid]) continue;
+        if (rec.get_lsn() < dpt_[pid])
+            continue;
 
         // Check 3: fetch page and check pageLSN
-        Page* page = buffer_manager_->fetch_page(pid);
-        if (page == nullptr) continue;
+        Page *page = buffer_manager_->fetch_page(pid);
+        if (page == nullptr)
+            continue;
 
-        if (page->get_page_lsn() >= rec.get_lsn()) {
+        if (page->get_page_lsn() >= rec.get_lsn())
+        {
             buffer_manager_->unpin_page(pid, false);
             continue;
         }
 
         // Apply the change.
-        const auto& new_data = rec.get_new_tuple_data();
-        const auto& old_data = rec.get_old_tuple_data();
+        const auto &new_data = rec.get_new_tuple_data();
+        const auto &old_data = rec.get_old_tuple_data();
 
-        if (rec.get_type() == LogRecordType::UPDATE) {
-            if (old_data.empty()) {
+        if (rec.get_type() == LogRecordType::UPDATE)
+        {
+            if (old_data.empty())
+            {
                 // Original operation was an INSERT — redo by inserting at
                 // the exact slot_id from the log record.  Never use
                 // insert_record() here: it may allocate a different slot.
@@ -215,24 +252,61 @@ void RecoveryManager::redo() {
                                   new_data.data(),
                                   static_cast<uint16_t>(new_data.size()),
                                   rec.get_lsn());
-            } else {
-                // Original operation was an UPDATE — redo by overwriting.
-                page->update_record(rec.get_slot_id(),
-                                    new_data.data(),
-                                    static_cast<uint16_t>(new_data.size()),
-                                    rec.get_lsn());
             }
-        } else {
+            else if (new_data.empty())
+            {
+                // Original operation was a DELETE — new_data is empty by
+                // convention.  update_record(size=0) would fail the size
+                // check and silently do nothing, leaving a ghost record.
+                page->delete_record(rec.get_slot_id(), rec.get_lsn());
+            }
+            else
+            {
+                // Original operation was an in-place UPDATE — redo by
+                // overwriting with the after-image.
+                // FIX: update_record requires exact size match. If the value
+                // length changed, it returns false and the redo is silently
+                // skipped, leaving the committed change invisible after crash.
+                // Fall back to delete + force-insert at the same slot so the
+                // RID stays stable and the correct after-image is applied.
+                bool ok = page->update_record(rec.get_slot_id(),
+                                              new_data.data(),
+                                              static_cast<uint16_t>(new_data.size()),
+                                              rec.get_lsn());
+                if (!ok)
+                {
+                    page->delete_record(rec.get_slot_id(), 0);
+                    page->redo_insert(rec.get_slot_id(),
+                                      new_data.data(),
+                                      static_cast<uint16_t>(new_data.size()),
+                                      rec.get_lsn());
+                }
+            }
+        }
+        else
+        {
             // CLR — redo whatever the compensation did.
-            if (new_data.empty()) {
+            if (new_data.empty())
+            {
                 // CLR undid an insert — redo the delete.
                 page->delete_record(rec.get_slot_id(), rec.get_lsn());
-            } else {
-                // CLR undid an update — redo restoring the before-image.
-                page->update_record(rec.get_slot_id(),
-                                    new_data.data(),
-                                    static_cast<uint16_t>(new_data.size()),
-                                    rec.get_lsn());
+            }
+            else
+            {
+                // CLR undid an update or delete — redo restoring the
+                // before-image. Same size-mismatch fix applies here.
+                bool ok = page->update_record(rec.get_slot_id(),
+                                              new_data.data(),
+                                              static_cast<uint16_t>(new_data.size()),
+                                              rec.get_lsn());
+                if (!ok)
+                {
+                    page->delete_record(rec.get_slot_id(), 0);
+                    page->redo_insert(rec.get_slot_id(),
+                                      new_data.data(),
+                                      static_cast<uint16_t>(new_data.size()),
+                                      rec.get_lsn());
+                }
             }
         }
 
@@ -253,40 +327,69 @@ void RecoveryManager::redo() {
 //      - ABORT  → follow prev_lsn (continue undoing)
 //   3. Repeat until the set is empty.
 
-void RecoveryManager::undo() {
-    if (att_.empty()) return;
+void RecoveryManager::undo()
+{
+    if (att_.empty())
+        return;
 
     // Collect lastLSNs of all losers into a max-ordered set.
     std::set<lsn_t, std::greater<lsn_t>> to_undo;
-    for (auto& [tid, last_lsn] : att_) {
-        if (last_lsn != INVALID_LSN) {
+    for (auto &[tid, last_lsn] : att_)
+    {
+        if (last_lsn != INVALID_LSN)
+        {
             to_undo.insert(last_lsn);
         }
     }
 
-    while (!to_undo.empty()) {
+    while (!to_undo.empty())
+    {
         lsn_t lsn = *to_undo.begin();
         to_undo.erase(to_undo.begin());
 
         LogRecord rec = log_manager_->read_record_at_lsn(lsn);
-        if (rec.get_type() == LogRecordType::INVALID) break;
+        if (rec.get_type() == LogRecordType::INVALID)
+            break;
 
         txn_id_t tid = rec.get_txn_id();
 
-        if (rec.get_type() == LogRecordType::UPDATE) {
+        if (rec.get_type() == LogRecordType::UPDATE)
+        {
             // ── Undo one data modification ──
-            Page* page = buffer_manager_->fetch_page(rec.get_page_id());
-            if (page != nullptr) {
-                const auto& old_data = rec.get_old_tuple_data();
+            Page *page = buffer_manager_->fetch_page(rec.get_page_id());
+            if (page != nullptr)
+            {
+                const auto &old_data = rec.get_old_tuple_data();
 
-                // Restore before-image (or delete if it was an insert).
-                if (old_data.empty()) {
+                // Restore before-image based on what the original operation was.
+                if (old_data.empty())
+                {
+                    // Original op was an INSERT — undo by deleting.
                     page->delete_record(rec.get_slot_id(), 0);
-                } else {
+                }
+                else if (rec.get_new_tuple_data().empty())
+                {
+                    // Original op was a DELETE — slot is a tombstone; restore
+                    // before-image into the exact same slot so the RID stays stable.
+                    page->redo_insert(rec.get_slot_id(),
+                                      old_data.data(),
+                                      static_cast<uint16_t>(old_data.size()), 0);
+                }
+                else
+                {
+                    // Original op was an in-place UPDATE — restore before-image.
+                    // If the value length changed, update_record returns false;
+                    // fall back to delete + force-insert at the same slot.
                     bool ok = page->update_record(rec.get_slot_id(),
-                                        old_data.data(),
-                                        static_cast<uint16_t>(old_data.size()), 0);
-                    assert(ok && "recovery undo: update_record failed");
+                                                  old_data.data(),
+                                                  static_cast<uint16_t>(old_data.size()), 0);
+                    if (!ok)
+                    {
+                        page->delete_record(rec.get_slot_id(), 0);
+                        page->redo_insert(rec.get_slot_id(),
+                                          old_data.data(),
+                                          static_cast<uint16_t>(old_data.size()), 0);
+                    }
                 }
 
                 // Write a CLR for crash-safety.
@@ -296,37 +399,45 @@ void RecoveryManager::undo() {
                               /*new_data=*/old_data,
                               /*undo_next_lsn=*/rec.get_prev_lsn());
                 lsn_t clr_lsn = log_manager_->append(clr);
-                att_[tid] = clr_lsn;   // update lastLSN in ATT
+                att_[tid] = clr_lsn; // update lastLSN in ATT
 
                 page->set_page_lsn(clr_lsn);
                 buffer_manager_->unpin_page(rec.get_page_id(), /*is_dirty=*/true);
             }
 
             // Continue undo from the previous record.
-            if (rec.get_prev_lsn() != INVALID_LSN) {
+            if (rec.get_prev_lsn() != INVALID_LSN)
+            {
                 to_undo.insert(rec.get_prev_lsn());
             }
-
-        } else if (rec.get_type() == LogRecordType::CLR) {
+        }
+        else if (rec.get_type() == LogRecordType::CLR)
+        {
             // CLR — this undo step was already done.  Jump to undo_next_lsn.
-            if (rec.get_undo_next_lsn() != INVALID_LSN) {
+            if (rec.get_undo_next_lsn() != INVALID_LSN)
+            {
                 to_undo.insert(rec.get_undo_next_lsn());
-            } else {
+            }
+            else
+            {
                 // undo_next_lsn == INVALID → BEGIN was reached, write TXN_END.
                 LogRecord end_rec(tid, att_[tid], LogRecordType::TXN_END);
                 log_manager_->append(end_rec);
                 att_.erase(tid);
             }
-
-        } else if (rec.get_type() == LogRecordType::BEGIN) {
+        }
+        else if (rec.get_type() == LogRecordType::BEGIN)
+        {
             // Reached the start of this transaction — fully undone.
             LogRecord end_rec(tid, att_[tid], LogRecordType::TXN_END);
             log_manager_->append(end_rec);
             att_.erase(tid);
-
-        } else {
+        }
+        else
+        {
             // ABORT or other records — follow the prev chain.
-            if (rec.get_prev_lsn() != INVALID_LSN) {
+            if (rec.get_prev_lsn() != INVALID_LSN)
+            {
                 to_undo.insert(rec.get_prev_lsn());
             }
         }
